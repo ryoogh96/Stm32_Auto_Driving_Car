@@ -1,0 +1,276 @@
+#include "stm32f10x.h"
+#include "stm32f10x_gpio.h"
+#include "stm32f10x_rcc.h"
+#include "misc.h"
+#include "stm32f10x_exti.h"
+#include "stm32f10x_usart.h"
+#include "core_cm3.h"
+#include "stm32f10x_tim.h"
+#include "stm32f10x_HC-SR04.h"
+#include "ctype.h"
+
+
+//flash load "C:\Users\Team02\Desktop\team0808\team08\flashclear.axf"
+//flash load "C:\Users\Team02\Desktop\team0808\team08\Debug\team08.axf"
+
+char a;
+char direction;
+char mode = '2';
+int isObstacle = 150;    // 장애물 인식 최소 거리
+int32_t dist;
+
+void EnableHCSR04PeriphClock(void) {
+	RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA, ENABLE);
+	RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOB, ENABLE);
+	RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM3, ENABLE);
+}
+
+void GPIO_set() {
+	GPIO_InitTypeDef gpioA9, gpioA10, gpioA2, gpioA1, gpioA3, gpioC, gpioD;
+
+
+	//바퀴
+	//GPIOD Port D 2, 3, 4, 7
+	//PD2:왼쪽 전진, PD3:왼쪽 후진, PD4:오른쪽 전진, PD7:오른쪽 후진
+	gpioC.GPIO_Pin = (GPIO_Pin_8 | GPIO_Pin_9 | GPIO_Pin_10 | GPIO_Pin_11);
+	gpioC.GPIO_Mode = GPIO_Mode_Out_PP;
+	gpioC.GPIO_Speed = GPIO_Speed_50MHz;
+	GPIO_Init(GPIOC, &gpioC);
+
+	gpioD.GPIO_Pin = (GPIO_Pin_2 | GPIO_Pin_3 | GPIO_Pin_4 | GPIO_Pin_7);
+	gpioD.GPIO_Mode = GPIO_Mode_Out_PP;
+	gpioD.GPIO_Speed = GPIO_Speed_50MHz;
+	GPIO_Init(GPIOD, &gpioD);
+
+	//피에조
+	gpioA1.GPIO_Pin = GPIO_Pin_1;
+	gpioA1.GPIO_Mode = GPIO_Mode_AF_PP;
+	gpioA1.GPIO_Speed = GPIO_Speed_10MHz;
+	GPIO_Init(GPIOA, &gpioA1);
+
+	//USART2
+	//USART2 TX: GPIOA Port 2
+	gpioA2.GPIO_Pin = GPIO_Pin_2;
+	gpioA2.GPIO_Mode = GPIO_Mode_AF_PP;
+	gpioA2.GPIO_Speed = GPIO_Speed_50MHz;
+	GPIO_Init(GPIOA, &gpioA2);
+
+	//USART2 RX: GPIOA Port 3
+	gpioA3.GPIO_Pin = GPIO_Pin_3;
+	gpioA3.GPIO_Mode = GPIO_Mode_IPD;
+	GPIO_Init(GPIOA, &gpioA3);
+
+	//USART1
+	//USART1 TX: GPIOA Port 9
+	gpioA9.GPIO_Pin = GPIO_Pin_9;
+	gpioA9.GPIO_Mode = GPIO_Mode_AF_PP;
+	gpioA9.GPIO_Speed = GPIO_Speed_50MHz;
+	GPIO_Init(GPIOA, &gpioA9);
+
+	//USART1 RX: GPIOA Port 10
+	gpioA10.GPIO_Pin = GPIO_Pin_10;
+	gpioA10.GPIO_Mode = GPIO_Mode_IPD;
+	//gpio3.GPIO_Speed = GPIO_Speed_50MHz;
+	GPIO_Init(GPIOA, &gpioA10);
+
+}
+
+void USART_Set() {
+	USART_InitTypeDef usart;
+	usart.USART_BaudRate = 9600;
+	usart.USART_Mode = (USART_Mode_Tx | USART_Mode_Rx);
+	usart.USART_WordLength = USART_WordLength_8b;
+	usart.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
+	usart.USART_Parity = USART_Parity_No;
+	usart.USART_StopBits = USART_StopBits_1;
+
+	USART_Init(USART1, &usart);
+	USART_Cmd(USART1, ENABLE);
+	USART_ITConfig(USART1, USART_IT_RXNE, ENABLE);
+
+	USART_Init(USART2, &usart);
+	USART_Cmd(USART2, ENABLE);
+	USART_ITConfig(USART2, USART_IT_RXNE, ENABLE);
+}
+
+void NVIC_set(){
+	NVIC_InitTypeDef nvic12, nvic123;
+	NVIC_PriorityGroupConfig(NVIC_PriorityGroup_2);
+
+	//USART1
+	nvic12.NVIC_IRQChannel = USART1_IRQn;
+	nvic12.NVIC_IRQChannelCmd = ENABLE;
+	nvic12.NVIC_IRQChannelPreemptionPriority = 1;
+	nvic12.NVIC_IRQChannelSubPriority = 1;
+	NVIC_Init(&nvic12);
+
+	//USART2
+	nvic123.NVIC_IRQChannel = USART2_IRQn;
+	nvic123.NVIC_IRQChannelCmd = ENABLE;
+	nvic123.NVIC_IRQChannelPreemptionPriority = 1;
+	nvic123.NVIC_IRQChannelSubPriority = 1;
+	NVIC_Init(&nvic123);
+}
+
+void USART1_IRQHandler() {
+	a = USART_ReceiveData(USART1);
+	direction = a;
+	USART_SendData(USART1, a);
+	USART_SendData(USART2, a);
+	USART_ClearITPendingBit(USART1, USART_IT_RXNE);
+	USART_ClearITPendingBit(USART2, USART_IT_RXNE);
+}
+
+void USART2_IRQHandler() {
+	a = USART_ReceiveData(USART2);
+	if(isalpha(a)){
+		direction = a;
+	}
+	else if(isdigit(a)){
+		mode = a;
+	}
+	USART_SendData(USART1, a);
+	USART_ClearITPendingBit(USART2, USART_IT_RXNE);
+	USART_ClearITPendingBit(USART1, USART_IT_RXNE);
+}
+
+void InitSound()
+{
+	//22727(솔) 20242(라) 18050(시)17035(높은도)
+
+	TIM_TimeBaseInitTypeDef TIM_TimeBaseStructure;
+	TIM_OCInitTypeDef TIM_OCInitStructure;
+
+	TIM_TimeBaseStructure.TIM_Period = 17035;   // 높은 도
+	TIM_TimeBaseStructure.TIM_ClockDivision = 0;
+	TIM_TimeBaseStructure.TIM_Prescaler = 0;
+	TIM_TimeBaseStructure.TIM_CounterMode = TIM_CounterMode_Up;
+	TIM_TimeBaseInit(TIM2, &TIM_TimeBaseStructure);
+
+	// TIM_OCMode_PWM1, TIM_OCMode_PWM2
+	TIM_OCInitStructure.TIM_OCMode = TIM_OCMode_Toggle;
+	TIM_OCInitStructure.TIM_OutputState = TIM_OutputState_Enable;
+	TIM_OCInitStructure.TIM_OCPolarity = TIM_OCPolarity_High;
+	TIM_OCInitStructure.TIM_Pulse = 17035/2;
+	TIM_OC2Init(TIM2, &TIM_OCInitStructure);
+	TIM_OC2PreloadConfig(TIM2, TIM_OCPreload_Enable);
+	TIM_ARRPreloadConfig(TIM2, ENABLE);
+	TIM_Cmd(TIM2, DISABLE);
+}
+
+
+void SendToUSART2(char* str){
+	int i;
+	while(*str){
+		USART_SendData(USART2, *str++);
+		for (i = 0; i < 100000; i++);
+	}
+}
+
+
+void SendToUSART1(char* str){
+	int i;
+	while(*str){
+		USART_SendData(USART1, *str++);
+		for (i = 0; i < 10000; i++);
+	}
+}
+
+void delay() {
+	int i;
+	for (i = 0; i < 100000; i++);
+}
+
+
+void longdelay() {
+	int i;
+	for (i = 0; i < 50000000/6; i++);
+}
+
+void goStraight(){
+	GPIO_SetBits(GPIOC, GPIO_Pin_8);
+	GPIO_SetBits(GPIOC, GPIO_Pin_9);
+}
+
+void turnLeft(){
+	GPIO_SetBits(GPIOC, GPIO_Pin_8);      //좌회전
+}
+
+void turnRight(){
+	GPIO_SetBits(GPIOC, GPIO_Pin_9);     // 우회전
+}
+
+void goBack(){
+	GPIO_SetBits(GPIOC, GPIO_Pin_10);    //후진
+	GPIO_SetBits(GPIOC, GPIO_Pin_11);
+}
+
+void RCC_set() {
+	RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM2, ENABLE);
+	RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA | RCC_APB2Periph_GPIOB | RCC_APB2Periph_GPIOC | RCC_APB2Periph_GPIOD | RCC_APB2Periph_AFIO, ENABLE);
+	RCC_APB1PeriphClockCmd(RCC_APB2Periph_USART1 | RCC_APB1Periph_USART2, ENABLE);
+
+}
+void motorReset(){
+	GPIO_ResetBits(GPIOC, GPIO_Pin_8);
+	GPIO_ResetBits(GPIOC, GPIO_Pin_9);
+	GPIO_ResetBits(GPIOC, GPIO_Pin_10);
+	GPIO_ResetBits(GPIOC, GPIO_Pin_11);
+}
+
+int main() {
+	SystemInit();
+	RCC_set();
+	GPIO_set();
+	InitHCSR04();
+	USART_Set();
+	NVIC_set();
+	InitSound();
+
+	longdelay();
+	SendToUSART2("AT+BTSCAN\r\n");
+
+	while(1){
+		dist = HCSR04GetDistance();
+		//자동
+		//c : 1이면 자동, 2면 수동(블루투스)
+		if(mode == '1') {
+			goStraight();
+			if(dist < isObstacle) {
+				GPIO_ResetBits(GPIOC, GPIO_Pin_8);
+				GPIO_ResetBits(GPIOC, GPIO_Pin_9);
+				longdelay();
+				TIM_Cmd(TIM2, ENABLE);
+				GPIO_SetBits(GPIOC, GPIO_Pin_8);
+				GPIO_SetBits(GPIOC, GPIO_Pin_11);
+				longdelay();
+				TIM_Cmd(TIM2, DISABLE);
+				GPIO_ResetBits(GPIOC, GPIO_Pin_8);
+				GPIO_ResetBits(GPIOC, GPIO_Pin_11);
+			}
+		}
+		// 수동
+		else if (mode == '2'){
+			if(direction == 'w'){
+				goStraight();
+				delay();
+			}
+			else if(direction == 'a'){
+				turnLeft();
+				delay();
+			}
+			else if(direction == 'd'){
+				turnRight();
+				delay();
+			}
+			else if(direction == 's'){
+				goBack();
+				delay();
+			}
+			else{
+				motorReset();
+			}
+		}
+
+	}
+}
